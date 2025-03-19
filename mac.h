@@ -60,5 +60,3 @@ namespace std {
 		}
 	};
 }
-
-std::string getMacAddress(const std::string& interfaceName);

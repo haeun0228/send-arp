@@ -98,7 +98,7 @@ ArpHdr* sendArp(pcap_t* pcap, Mac eth_dmac, Mac eth_smac, Ip sip, Ip dip, Mac ar
         if(ethHdr->type() != htons(EthHdr::Arp)) continue;
 
         ArpHdr* arpHdr = (struct ArpHdr*)(reply_packet + sizeof(struct EthHdr));
-        if(arpHdr->sip() == Ip(dip) || arpHdr->op() == htons(ArpHdr::Reply)){
+        if(arpHdr->sip() == Ip(dip) && arpHdr->op() == htons(ArpHdr::Reply)){
             return arpHdr;
         }
     }
